@@ -8,20 +8,8 @@ except ImportError:
     from collections import MutableSequence  # noqa
 
 from copy import copy
-from math import (
-    acos,
-    atan,
-    atan2,
-    ceil,
-    cos,
-    degrees,
-    hypot,
-    log,
-    radians,
-    sin,
-    sqrt,
-    tan,
-)
+from math import (acos, atan, atan2, ceil, cos, degrees, hypot, log, radians,
+                  sin, sqrt, tan)
 from xml.etree.ElementTree import iterparse
 
 try:
@@ -43,7 +31,7 @@ Though not required the Image class acquires new functionality if provided with 
 and the Arc can do exact arc calculations if scipy is installed.
 """
 
-SVGELEMENTS_VERSION = "1.6.1"
+SVGELEMENTS_VERSION = "1.6.3"
 
 MIN_DEPTH = 5
 ERROR = 1e-12
@@ -1019,6 +1007,7 @@ class Color(object):
 
     def __init__(self, *args, **kwargs):
         self.value = 0
+
         arglen = len(args)
         if arglen == 1:
             v = args[0]
@@ -1696,20 +1685,26 @@ class Color(object):
 
     @property
     def hexa(self):
+        if self.value is None:
+            return None
         return (
             "#%02x%02x%02x%02x" % (self.red, self.green, self.blue, self.alpha)
-            if self.value is not None
-            else None
+        )
+
+    @property
+    def hexrgb(self):
+        if self.value is None:
+            return None
+        return (
+            "#%02x%02x%02x" % (self.red, self.green, self.blue)
         )
 
     @property
     def hex(self):
+        if self.value is None:
+            return None
         if self.alpha == 0xFF:
-            return (
-                "#%02x%02x%02x" % (self.red, self.green, self.blue)
-                if self.value is not None
-                else None
-            )
+            return self.hexrgb
         else:
             return self.hexa
 
@@ -3371,7 +3366,7 @@ class Transformable:
             self.transform.render(**kwargs)
         return self
 
-    def bbox(self, transformed=True):
+    def bbox(self, transformed=True, with_stroke=False):
         """
         Returns the bounding box of the given object.
 
@@ -3703,7 +3698,7 @@ class Shape(SVGElement, GraphicObject, Transformable):
         """
         return Path(self.segments(transformed=transformed)).d(relative=relative)
 
-    def bbox(self, transformed=True):
+    def bbox(self, transformed=True, with_stroke=False):
         """
         Get the bounding box for the given shape.
         """
@@ -3712,11 +3707,23 @@ class Shape(SVGElement, GraphicObject, Transformable):
             for seg in self.segments(transformed=transformed)
             if not isinstance(Close, Move)
         ]
+
         try:
             xmins, ymins, xmaxs, ymaxs = list(zip(*bbs))
         except ValueError:
             return None  # No bounding box items existed. So no bounding box.
-        return min(xmins), min(ymins), max(xmaxs), max(ymaxs)
+
+        if with_stroke and self.stroke_width is not None:
+            delta = float(self.stroke_width) / 2.0
+        else:
+            delta = 0.0
+
+        return (
+            min(xmins) - delta,
+            min(ymins) - delta,
+            max(xmaxs) + delta,
+            max(ymaxs) + delta,
+        )
 
     def _init_shape(self, *args):
         """
@@ -3744,18 +3751,19 @@ class Shape(SVGElement, GraphicObject, Transformable):
         """
         Generic pieces of repr shape.
         """
-        if self.stroke is not None:
-            values.append("%s='%s'" % (SVG_ATTR_STROKE, self.stroke))
-            if self.stroke.opacity is not None and self.stroke.opacity != 1.0:
-                values.append("%s='%s'" % ("stroke_opacity", self.stroke.opacity))
-        if self.fill is not None:
-            values.append("%s='%s'" % (SVG_ATTR_FILL, self.fill))
-            if self.fill.opacity is not None and self.fill.opacity != 1.0:
-                values.append("%s='%s'" % ("fill_opacity", self.fill.opacity))
+        # Cannot use SVG_ATTR_* for some attributes in repr because they contain hyphens
+        if self.stroke is not None and self.stroke.rgb is not None:
+            values.append("%s='%s'" % (SVG_ATTR_STROKE, self.stroke.hexrgb))
+            if self.stroke.opacity != 1.0:
+                values.append("%s=%s" % ("stroke_opacity", str(self.stroke.opacity)))
+        if self.fill is not None and self.fill.rgb is not None:
+            values.append("%s='%s'" % (SVG_ATTR_FILL, self.fill.hexrgb))
+            if self.fill.opacity != 1.0:
+                values.append("%s=%s" % ("fill_opacity", str(self.fill.opacity)))
         if self.stroke_width is not None and self.stroke_width != 1.0:
             values.append(
                 "stroke_width=%s" % str(self.stroke_width)
-            )  # Cannot use SVG_ATTR_STROKE_WIDTH for repr because it contains a hyphen
+            )
         if not self.transform.is_identity():
             values.append("%s=%s" % (SVG_ATTR_TRANSFORM, repr(self.transform)))
         if self.apply is not None and not self.apply:
@@ -3765,20 +3773,24 @@ class Shape(SVGElement, GraphicObject, Transformable):
 
     def _str_shape(self, values):
         """
-        Generic pieces of repr shape.
+        Generic pieces of str shape.
         """
-        if self.stroke is not None:
-            values.append("%s='%s'" % (SVG_ATTR_STROKE, self.stroke))
-            if self.stroke.opacity is not None and self.stroke.opacity != 1.0:
+        if self.stroke is not None and self.stroke.rgb is not None:
+            values.append("%s='%s'" % (SVG_ATTR_STROKE, self.stroke.hexrgb))
+            if self.stroke.opacity != 1.0:
                 values.append(
-                    "%s='%s'" % (SVG_ATTR_STROKE_OPACITY, self.stroke.opacity)
+                    "%s=%s" % (SVG_ATTR_STROKE_OPACITY, str(self.stroke.opacity))
                 )
-        if self.fill is not None:
-            values.append("%s='%s'" % (SVG_ATTR_FILL, self.fill))
-            if self.fill.opacity is not None and self.fill.opacity != 1.0:
-                values.append("%s='%s'" % (SVG_ATTR_FILL_OPACITY, self.fill.opacity))
+        if self.fill is not None and self.fill.rgb is not None:
+            values.append("%s='%s'" % (SVG_ATTR_FILL, self.fill.hexrgb))
+            if self.fill.opacity != 1.0:
+                values.append(
+                    "%s=%s" % (SVG_ATTR_FILL_OPACITY, str(self.fill.opacity))
+                )
         if self.stroke_width is not None and self.stroke_width != 1.0:
-            values.append("%s=%s" % (SVG_ATTR_STROKE_WIDTH, str(self.stroke_width)))
+            values.append(
+                "%s=%s" % (SVG_ATTR_STROKE_WIDTH, str(self.stroke_width))
+            )
         if not self.transform.is_identity():
             values.append("%s=%s" % (SVG_ATTR_TRANSFORM, repr(self.transform)))
         if self.apply is not None and not self.apply:
@@ -7441,12 +7453,12 @@ class Group(SVGElement, Transformable, list):
         Transformable.reify(self)
 
     @staticmethod
-    def union_bbox(elements, transformed=True):
+    def union_bbox(elements, transformed=True, with_stroke=False):
         boundary_points = []
         for e in elements:
             if not hasattr(e, "bbox"):
                 continue
-            box = e.bbox(False)
+            box = e.bbox(transformed=False, with_stroke=with_stroke)
             if box is None:
                 continue
             top_left = (box[0], box[1])
@@ -7470,7 +7482,7 @@ class Group(SVGElement, Transformable, list):
         ymax = max([e[1] for e in boundary_points])
         return xmin, ymin, xmax, ymax
 
-    def bbox(self, transformed=True):
+    def bbox(self, transformed=True, with_stroke=False):
         """
         Returns the bounding box of the given object.
 
@@ -7482,7 +7494,11 @@ class Group(SVGElement, Transformable, list):
         :param transformed: bounding box of the properly transformed children.
         :return:
         """
-        return Group.union_bbox(self.select(), transformed)
+        return Group.union_bbox(
+            self.select(),
+            transformed=transformed,
+            with_stroke=with_stroke,
+        )
 
 
 class ClipPath(SVGElement, list):
@@ -7624,6 +7640,33 @@ class Text(SVGElement, GraphicObject, Transformable):
         GraphicObject.__init__(self, *args, **kwargs)
         SVGElement.__init__(self, *args, **kwargs)
 
+    def __str__(self):
+        values = list()
+        values.append("'%s'" % self.text)
+        values.append("%s='%s'" % (SVG_ATTR_FONT_FAMILY, self.font_family))
+        if self.font_face:
+            values.append("%s=%s" % (SVG_ATTR_FONT_FACE, self.font_face))
+        values.append("%s=%d" % (SVG_ATTR_FONT_SIZE, self.font_size))
+        values.append("%s='%s'" % (SVG_ATTR_FONT_WEIGHT, str(self.font_weight)))
+        values.append("%s='%s'" % (SVG_ATTR_TEXT_ANCHOR, self.anchor))
+        if self.x != 0 or self.y != 0:
+            values.append("%s=%s" % (SVG_ATTR_X, self.x))
+            values.append("%s=%s" % (SVG_ATTR_Y, self.y))
+        if self.dx != 0 or self.dy != 0:
+            values.append("%s=%s" % (SVG_ATTR_DX, self.dx))
+            values.append("%s=%s" % (SVG_ATTR_DY, self.dy))
+        if self.stroke is not None:
+            values.append("%s='%s'" % (SVG_ATTR_STROKE, self.stroke))
+        if self.fill is not None:
+            values.append("%s='%s'" % (SVG_ATTR_FILL, self.fill))
+        if self.stroke_width is not None and self.stroke_width != 1.0:
+            values.append("%s=%s" % (SVG_ATTR_STROKE_WIDTH, str(self.stroke_width)))
+        if not self.transform.is_identity():
+            values.append("%s=%s" % (SVG_ATTR_TRANSFORM, repr(self.transform)))
+        if self.id is not None:
+            values.append("%s='%s'" % (SVG_ATTR_ID, self.id))
+        return "Text(%s)" % (", ".join(values))
+
     def __repr__(self):
         # Cannot use SVG_ATTR_FONT_* or SVG_ATTR_TEXT_ANCHOR for repr because they contain hyphens
         values = list()
@@ -7634,13 +7677,11 @@ class Text(SVGElement, GraphicObject, Transformable):
         values.append("font_size=%d" % self.font_size)
         values.append("font_weight='%s'" % str(self.font_weight))
         values.append("text_anchor='%s'" % self.anchor)
-        if self.x != 0:
+        if self.x != 0 or self.y != 0:
             values.append("%s=%s" % (SVG_ATTR_X, self.x))
-        if self.y != 0:
             values.append("%s=%s" % (SVG_ATTR_Y, self.y))
-        if self.dx != 0:
+        if self.dx != 0 or self.dy != 0:
             values.append("%s=%s" % (SVG_ATTR_DX, self.dx))
-        if self.dy != 0:
             values.append("%s=%s" % (SVG_ATTR_DY, self.dy))
         if self.stroke is not None:
             values.append("%s='%s'" % (SVG_ATTR_STROKE, self.stroke))
@@ -7649,7 +7690,7 @@ class Text(SVGElement, GraphicObject, Transformable):
         if self.stroke_width is not None and self.stroke_width != 1.0:
             values.append(
                 "stroke_width=%s" % str(self.stroke_width)
-            )  # Cannot use SVG_ATTR_STROKE_WIDTH for repr because it contains a hyphen
+            ) # Cannot use SVG_ATTR_STROKE_WIDTH for repr because it contains a hyphen
         if not self.transform.is_identity():
             values.append("%s=%s" % (SVG_ATTR_TRANSFORM, repr(self.transform)))
         if self.id is not None:
@@ -7763,9 +7804,8 @@ class Text(SVGElement, GraphicObject, Transformable):
         self.font_size = Length(values.get("font_size", self.font_size)).value()
         self.font_size = Length(values.get(SVG_ATTR_FONT_SIZE, self.font_size)).value()
         self.font_weight = values.get("font_weight", self.font_weight)
-        self.font_weight = self.parse_font_weight(
-            values.get(SVG_ATTR_FONT_WEIGHT, self.font_weight)
-        )
+        self.font_weight = values.get(SVG_ATTR_FONT_WEIGHT, self.font_weight)
+        self.font_weight = self.parse_font_weight(self.font_weight)
         self.anchor = values.get("text_anchor", self.anchor)
         self.anchor = values.get(SVG_ATTR_TEXT_ANCHOR, self.anchor)
         font = values.get(SVG_ATTR_FONT, None)
@@ -7803,18 +7843,23 @@ class Text(SVGElement, GraphicObject, Transformable):
     def __copy__(self):
         return Text(self)
 
-    def bbox(self, transformed=True):
+    def bbox(self, transformed=True, with_stroke=False):
         """
         Get the bounding box for the given text object.
         """
         if self.path is not None:
-            return (self.path * self.transform).bbox(transformed=True)
+            return (self.path * self.transform).bbox(
+                transformed=True,
+                with_stroke=with_stroke,
+            )
+
         width = self.width
         height = self.height
         xmin = self.x
         ymin = self.y - height
         xmax = self.x + width
         ymax = self.y
+
         if not hasattr(self, "anchor") or self.anchor == "start":
             pass
         elif self.anchor == "middle":
@@ -7832,8 +7877,18 @@ class Text(SVGElement, GraphicObject, Transformable):
             ymin = min(p0[1], p1[1], p2[1], p3[1])
             xmax = max(p0[0], p1[0], p2[0], p3[0])
             ymax = max(p0[1], p1[1], p2[1], p3[1])
-        return xmin, ymin, xmax, ymax
 
+        if with_stroke and self.stroke_width is not None:
+            delta = float(self.stroke_width) / 2.0
+        else:
+            delta = 0.0
+
+        return (
+            xmin - delta,
+            ymin - delta,
+            xmax + delta,
+            ymax + delta,
+        )
 
 SVGText = Text
 
@@ -8044,7 +8099,7 @@ class Image(SVGElement, GraphicObject, Transformable):
                             from os.path import join
 
                             relpath = join(directory, self.url)
-                            self.image = Image.open(relpath)
+                            self.image = PILImage.open(relpath)
                     except IOError:
                         return
         except ImportError:
@@ -8063,9 +8118,11 @@ class Image(SVGElement, GraphicObject, Transformable):
         self.render(width=self.image_width, height=self.image_height)
         self.transform = Matrix(self.viewbox_transform) * self.transform
 
-    def bbox(self, transformed=True):
+    def bbox(self, transformed=True, with_stroke=False):
         """
         Get the bounding box for the given image object
+
+        There is no stroke for an image so with_stroke is ignored
         """
         if self.image_width is None or self.image_height is None:
             p = Point(0, 0)
@@ -8073,6 +8130,7 @@ class Image(SVGElement, GraphicObject, Transformable):
             return p.x, p.y, p.x, p.y
         width = self.image_width
         height = self.image_height
+
         if transformed:
             p = (
                 Point(0, 0) * self.transform,
@@ -8084,12 +8142,8 @@ class Image(SVGElement, GraphicObject, Transformable):
             p = (Point(0, 0), Point(width, 0), Point(width, height), Point(0, height))
         x_vals = list(s.x for s in p)
         y_vals = list(s.y for s in p)
-        min_x = min(x_vals)
-        min_y = min(y_vals)
-        max_x = max(x_vals)
-        max_y = max(y_vals)
-        return min_x, min_y, max_x, max_y
 
+        return min(x_vals), min(y_vals), max(x_vals), max(y_vals)
 
 SVGImage = Image
 
@@ -8402,7 +8456,6 @@ class SVG(Group):
             """
             SVG element parsing parses the job compiling any parsed elements into their compiled object forms.
             """
-            # print(event, elem)
             if event == "start":
                 stack.append((context, values))
                 if (
